@@ -32,7 +32,6 @@ import io.questdb.cairo.sql.SymbolTable;
 import io.questdb.cairo.vm.Vm;
 import io.questdb.cairo.vm.api.MemoryMARW;
 import io.questdb.cutlass.line.LineProtoTimestampAdapter;
-import io.questdb.cutlass.line.tcp.NewLineProtoParser.ProtoEntity;
 import io.questdb.log.Log;
 import io.questdb.log.LogFactory;
 import io.questdb.mp.*;
@@ -75,10 +74,8 @@ class LineTcpMeasurementScheduler implements Closeable {
     private final double maxLoadRatio;
     private final long maintenanceInterval;
     private final long writerIdleTimeout;
-    private final int defaultPartitionBy;
     private final int commitMode;
     private final NetworkIOJob[] netIoJobs;
-    private final TableStructureAdapter tableStructureAdapter = new TableStructureAdapter();
     private final Path path = new Path();
     private final MemoryMARW ddlMem = Vm.getMARWInstance();
     private Sequence pubSeq;
@@ -144,7 +141,6 @@ class LineTcpMeasurementScheduler implements Closeable {
         nUpdatesPerLoadRebalance = lineConfiguration.getNUpdatesPerLoadRebalance();
         maxLoadRatio = lineConfiguration.getMaxLoadRatio();
         maintenanceInterval = lineConfiguration.getMaintenanceInterval();
-        defaultPartitionBy = lineConfiguration.getDefaultPartitionBy();
         writerIdleTimeout = lineConfiguration.getWriterIdleTimeout();
     }
 
@@ -338,30 +334,16 @@ class LineTcpMeasurementScheduler implements Closeable {
         this.listener = listener;
     }
 
-    private TableUpdateDetails startNewMeasurementEvent(NetworkIOJob netIoJob, NewLineProtoParser protoParser) {
-        final TableUpdateDetails tableUpdateDetails = netIoJob.getTableUpdateDetails(protoParser.getMeasurementName());
-        if (null != tableUpdateDetails) {
-            return tableUpdateDetails;
-        }
-        return startNewMeasurementEvent0(netIoJob, protoParser);
-    }
-
-    private TableUpdateDetails startNewMeasurementEvent0(NetworkIOJob netIoJob, NewLineProtoParser protoParser) {
+    public TableUpdateDetails startNewMeasurementEvent(NetworkIOJob netIoJob, CharSequence tableName) {
         TableUpdateDetails tableUpdateDetails;
         tableUpdateDetailsLock.writeLock().lock();
         try {
-            int keyIndex = tableUpdateDetailsByTableName.keyIndex(protoParser.getMeasurementName());
+            int keyIndex = tableUpdateDetailsByTableName.keyIndex(tableName);
             if (keyIndex < 0) {
                 tableUpdateDetails = tableUpdateDetailsByTableName.valueAt(keyIndex);
             } else {
-                String tableName = protoParser.getMeasurementName().toString();
-                int status = engine.getStatus(securityContext, path, tableName, 0, tableName.length());
-                if (status != TableUtils.TABLE_EXISTS) {
-                    LOG.info().$("creating table [tableName=").$(tableName).$(']').$();
-                    engine.createTable(securityContext, ddlMem, path, tableStructureAdapter.of(tableName, protoParser));
-                }
-
-                keyIndex = idleTableUpdateDetailsByTableName.keyIndex(tableName);
+                String tableNameStr = tableName.toString();
+                keyIndex = idleTableUpdateDetailsByTableName.keyIndex(tableNameStr);
                 if (keyIndex < 0) {
                     LOG.info().$("idle table going active [tableName=").$(tableName).I$();
                     tableUpdateDetails = idleTableUpdateDetailsByTableName.valueAt(keyIndex);
@@ -369,7 +351,7 @@ class LineTcpMeasurementScheduler implements Closeable {
                     tableUpdateDetailsByTableName.put(tableUpdateDetails.tableName, tableUpdateDetails);
                 } else {
                     TelemetryTask.doStoreTelemetry(engine, Telemetry.SYSTEM_ILP_RESERVE_WRITER, Telemetry.ORIGIN_ILP_TCP);
-                    tableUpdateDetails = assignTableToThread(tableName);
+                    tableUpdateDetails = assignTableToThread(tableNameStr);
                 }
             }
 
@@ -380,43 +362,27 @@ class LineTcpMeasurementScheduler implements Closeable {
         }
     }
 
-    boolean tryButCouldNotCommit(NetworkIOJob netIoJob, NewLineProtoParser protoParser, FloatingDirectCharSink charSink) {
-        TableUpdateDetails tableUpdateDetails;
-        try {
-            tableUpdateDetails = startNewMeasurementEvent(netIoJob, protoParser);
-        } catch (EntryUnavailableException ex) {
-            // Table writer is locked
-            LOG.info().$("could not get table writer [tableName=").$(protoParser.getMeasurementName()).$(", ex=").$(ex.getFlyweightMessage()).$(']').$();
-            return true;
-        } catch (CairoException ex) {
-            // Table could not be created
-            LOG.info().$("could not create table [tableName=").$(protoParser.getMeasurementName()).$(", ex=").$(ex.getFlyweightMessage()).$(']').$();
-            return false;
-        }
-        if (null != tableUpdateDetails) {
-            long seq = getNextPublisherEventSequence();
-            if (seq >= 0) {
-                try {
-                    LineTcpMeasurementEvent event = queue.get(seq);
-                    event.threadId = INCOMPLETE_EVENT_ID;
-                    TableUpdateDetails.ThreadLocalDetails localDetails = tableUpdateDetails.startNewMeasurementEvent(netIoJob.getWorkerId());
-                    event.createMeasurementEvent(tableUpdateDetails, localDetails, protoParser, charSink);
-                    return false;
-                } finally {
-                    pubSeq.done(seq);
-                    if (++tableUpdateDetails.nUpdates > nUpdatesPerLoadRebalance) {
-                        if (tableUpdateDetailsLock.writeLock().tryLock()) {
-                            try {
-                                loadRebalance();
-                            } finally {
-                                tableUpdateDetailsLock.writeLock().unlock();
-                            }
+    public void tryButCouldNotCommit(NetworkIOJob netIoJob, TableUpdateDetails tableUpdateDetails, FloatingDirectCharSink charSink) {
+        long seq = getNextPublisherEventSequence();
+        if (seq >= 0) {
+            try {
+                LineTcpMeasurementEvent event = queue.get(seq);
+                event.threadId = INCOMPLETE_EVENT_ID;
+                TableUpdateDetails.ThreadLocalDetails localDetails = tableUpdateDetails.startNewMeasurementEvent(netIoJob.getWorkerId());
+                event.createMeasurementEvent(tableUpdateDetails, localDetails, protoParser, charSink);
+            } finally {
+                pubSeq.done(seq);
+                if (++tableUpdateDetails.nUpdates > nUpdatesPerLoadRebalance) {
+                    if (tableUpdateDetailsLock.writeLock().tryLock()) {
+                        try {
+                            loadRebalance();
+                        } finally {
+                            tableUpdateDetailsLock.writeLock().unlock();
                         }
                     }
                 }
             }
         }
-        return true;
     }
 
     interface NetworkIOJob extends Job {
@@ -1482,93 +1448,6 @@ class LineTcpMeasurementScheduler implements Closeable {
                     .$(", tableName=").$(tableUpdateDetails.tableName)
                     .$(", nNetworkIoWorkers=").$(tableUpdateDetails.nNetworkIoWorkers)
                     .I$();
-        }
-    }
-
-    private class TableStructureAdapter implements TableStructure {
-        private CharSequence tableName;
-        private NewLineProtoParser protoParser;
-
-        @Override
-        public int getColumnCount() {
-            return protoParser.getnEntities() + 1;
-        }
-
-        @Override
-        public CharSequence getColumnName(int columnIndex) {
-            assert columnIndex <= getColumnCount();
-            if (columnIndex == getTimestampIndex()) {
-                return "timestamp";
-            }
-            CharSequence colName = protoParser.getEntity(columnIndex).getName().toString();
-            if (TableUtils.isValidColumnName(colName)) {
-                return colName;
-            }
-            throw CairoException.instance(0).put("column name contains invalid characters [colName=").put(colName).put(']');
-        }
-
-        @Override
-        public int getColumnType(int columnIndex) {
-            if (columnIndex == getTimestampIndex()) {
-                return ColumnType.TIMESTAMP;
-            }
-            return DEFAULT_COLUMN_TYPES[protoParser.getEntity(columnIndex).getType()];
-        }
-
-        @Override
-        public int getIndexBlockCapacity(int columnIndex) {
-            return 0;
-        }
-
-        @Override
-        public boolean isIndexed(int columnIndex) {
-            return false;
-        }
-
-        @Override
-        public boolean isSequential(int columnIndex) {
-            return false;
-        }
-
-        @Override
-        public int getPartitionBy() {
-            return defaultPartitionBy;
-        }
-
-        @Override
-        public boolean getSymbolCacheFlag(int columnIndex) {
-            return cairoConfiguration.getDefaultSymbolCacheFlag();
-        }
-
-        @Override
-        public int getSymbolCapacity(int columnIndex) {
-            return cairoConfiguration.getDefaultSymbolCapacity();
-        }
-
-        @Override
-        public CharSequence getTableName() {
-            return tableName;
-        }
-
-        @Override
-        public int getTimestampIndex() {
-            return protoParser.getnEntities();
-        }
-
-        @Override
-        public int getMaxUncommittedRows() {
-            return cairoConfiguration.getMaxUncommittedRows();
-        }
-
-        @Override
-        public long getCommitLag() {
-            return cairoConfiguration.getCommitLag();
-        }
-
-        TableStructureAdapter of(CharSequence tableName, NewLineProtoParser protoParser) {
-            this.tableName = tableName;
-            this.protoParser = protoParser;
-            return this;
         }
     }
 

@@ -79,8 +79,8 @@ public class CairoLineProtoParserListener implements LineProtoParserListener, Cl
     private long columnName;
     private int columnType;
     private final FieldNameParser MY_FIELD_NAME = this::parseFieldName;
-    private long tableName;
-    private final LineEndParser MY_NEW_LINE_END = this::createTableAndAppendRow;
+    protected long tableName;
+    protected LineEndParser MY_NEW_LINE_END = this::createTableAndAppendRow;
     private LineEndParser onLineEnd;
     private FieldNameParser onFieldName;
     private FieldValueParser onFieldValue;
@@ -485,7 +485,7 @@ public class CairoLineProtoParserListener implements LineProtoParserListener, Cl
     }
 
     @FunctionalInterface
-    private interface LineEndParser {
+    protected interface LineEndParser {
         void parse(CharSequenceCache cache);
     }
 

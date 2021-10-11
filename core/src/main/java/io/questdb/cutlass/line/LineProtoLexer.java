@@ -63,8 +63,6 @@ public class LineProtoLexer implements Mutable, Closeable {
     private ReturnState lastReturnState = ReturnState.OK;
 
     public LineProtoLexer(int bufferSize) {
-        buffer = Unsafe.malloc(bufferSize, MemoryTag.NATIVE_DEFAULT);
-        bufferHi = buffer + bufferSize;
         charSequenceCache = address -> {
             floatingCharSequence.lo = buffer + Numbers.decodeHighInt(address);
             floatingCharSequence.hi = buffer + Numbers.decodeLowInt(address) - 2;
@@ -72,6 +70,11 @@ public class LineProtoLexer implements Mutable, Closeable {
             assert floatingCharSequence.lo >= buffer;
             return floatingCharSequence;
         };
+        if (buffer != 0) {
+            close();
+        }
+        buffer = Unsafe.malloc(bufferSize, MemoryTag.NATIVE_DEFAULT);
+        bufferHi = buffer + bufferSize;
         clear();
     }
 
@@ -253,23 +256,21 @@ public class LineProtoLexer implements Mutable, Closeable {
         return ReturnState.OK;
     }
 
-    private ReturnState onEsc() { // '\' backslash
+    private void onEsc() { // '\' backslash
         if (!unquoted) {
             escapeQuote = true; // found in string
         } else {
             escape = true;
         }
-        return ReturnState.OK;
     }
 
-    private ReturnState onQuote(byte lastByte) {
+    private void onQuote(byte lastByte) {
         if (lastByte == (byte) '=' && !escapeQuote && unquoted) {
             unquoted = false; // open quote
         } else if (!unquoted && !escapeQuote) {
             unquoted = true; // close quote
         }
         escapeQuote = false;
-        return ReturnState.OK;
     }
 
     private ReturnState onSpace() {
@@ -317,32 +318,38 @@ public class LineProtoLexer implements Mutable, Closeable {
                     lastByte = b;
                     continue;
                 }
-                ReturnState yield = ReturnState.OK;
+                ReturnState yield;
                 switch (b) {
+                    default:
+                        escapeQuote = false;
+                        lastByte = b;
+                        continue;
                     case '"':
-                        yield = onQuote(lastByte);
-                        break;
+                        onQuote(lastByte);
+                        lastByte = b;
+                        continue;
                     case '\\':
-                        yield = onEsc();
-                        break;
+                        onEsc();
+                        lastByte = b;
+                        continue;
                     case '\n':
                     case '\r':
                         yield = onEol();
+                        lastByte = b;
                         break;
                     case ' ':
                         yield = onSpace();
+                        lastByte = b;
                         break;
                     case ',':
                         yield = onComma();
+                        lastByte = b;
                         break;
                     case '=':
                         yield = onEquals();
-                        break;
-                    default:
-                        escapeQuote = false;
+                        lastByte = b;
                         break;
                 }
-                lastByte = b;
                 if (yield != ReturnState.OK) {
                     position = p;
                     return lastReturnState = yield;
