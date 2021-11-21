@@ -1140,6 +1140,21 @@ public class ExpressionParserTest extends AbstractCairoTest {
 
     }
 
+    @Test
+    public void testAliasTimeWithCol1Name() throws Exception {
+        x("(select-choose col1 time from (tst))", "select col1 time from tst");
+    }
+
+    @Test
+    public void testAliasTimeWithTimestampCol() throws Exception {
+        x("(select-choose timestamp time from (tst))", "select timestamp time from tst");
+    }
+
+    @Test
+    public void testAliasZonwWithTimestampCol() throws Exception {
+        x("(select-choose timestamp zone from (tst))", "select timestamp zone from tst");
+    }
+
     private void assertFail(String content, int pos, String contains) {
         try {
             compiler.testParseExpression(content, rpnBuilder);

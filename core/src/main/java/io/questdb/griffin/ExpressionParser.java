@@ -71,6 +71,7 @@ class ExpressionParser {
     private final SqlParser sqlParser;
     private final CharacterStore characterStore;
 
+    private int timestampWithTimeZone = 0;
     ExpressionParser(ObjectPool<ExpressionNode> expressionNodePool, SqlParser sqlParser, CharacterStore characterStore) {
         this.expressionNodePool = expressionNodePool;
         this.sqlParser = sqlParser;
@@ -1013,7 +1014,16 @@ class ExpressionParser {
                         ExpressionNode last;
                         if ((last = this.opStack.peek()) != null && SqlKeywords.isTimestampKeyword(last.token) && (SqlKeywords.isWithKeyword(tok) || SqlKeywords.isTimeKeyword(tok) || SqlKeywords.isZoneKeyword(tok))) {
                             // Skip "with time zone" part of "timestamp with time zone" for Postgres compatibility #740, #980
-                            continue;
+                            /* Ensure that time and zone can be used as an alias for timestamp */
+                            if (SqlKeywords.isWithKeyword(tok)){
+                                timestampWithTimeZone = 1;
+                                continue;
+                            } else if(SqlKeywords.isTimeKeyword(tok) && timestampWithTimeZone == 1){
+                                continue;
+                            } else if (SqlKeywords.isZoneKeyword(tok) && timestampWithTimeZone == 1){
+                                continue;
+                            }
+                            //continue;
                         }
                         // literal can be at start of input, after a bracket or part of an operator
                         // all other cases are illegal and will be considered end-of-input
