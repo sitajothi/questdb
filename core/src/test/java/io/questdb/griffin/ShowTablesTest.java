@@ -138,4 +138,25 @@ public class ShowTablesTest extends AbstractGriffinTest {
     public void testShowTimeZoneWrongSyntax() throws Exception {
         assertMemoryLeak(() -> assertFailure("show time", null, 5, "expected 'tables', 'columns' or 'time zone'"));
     }
+
+    /* Tests to understand how show tables is working */
+    @Test
+    public void testShowTablesWithTwoTablesAlphabetical() throws Exception {
+        assertMemoryLeak(() -> {
+            compiler.compile("create table apples(cust_id int, ccy symbol, balance double)", sqlExecutionContext);
+            assertQuery("table\napples\n", "show tables", null, false, sqlExecutionContext, false);
+            compiler.compile("create table balances(cust_id int, ccy symbol, balance double)", sqlExecutionContext);
+            assertQuery("table\napples\nbalances\n", "show tables", null, false, sqlExecutionContext, false);
+        });
+    }
+
+    @Test
+    public void testShowTablesWithTwoTables() throws Exception {
+        assertMemoryLeak(() -> {
+            compiler.compile("create table balances(cust_id int, ccy symbol, balance double)", sqlExecutionContext);
+            assertQuery("table\nbalances\n", "show tables", null, false, sqlExecutionContext, false);
+            compiler.compile("create table apple(cust_id int, ccy symbol, balance double)", sqlExecutionContext);
+            assertQuery("table\napple\nbalances\n", "show tables", null, false, sqlExecutionContext, false);
+        });
+    }
 }

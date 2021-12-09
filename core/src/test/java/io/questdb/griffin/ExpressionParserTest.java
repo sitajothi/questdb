@@ -1140,6 +1140,9 @@ public class ExpressionParserTest extends AbstractCairoTest {
 
     }
 
+    /* Tests added to ensure that time and zone can be used as an alias for timestamp */
+    /* CS427 Issue link: https://github.com/questdb/questdb/issues/1075 */
+
     @Test
     public void testAliasTimeWithCol1Name() throws Exception {
         x("(select-choose col1 time from (tst))", "select col1 time from tst");

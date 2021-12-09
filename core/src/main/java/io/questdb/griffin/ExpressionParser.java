@@ -1015,6 +1015,7 @@ class ExpressionParser {
                         if ((last = this.opStack.peek()) != null && SqlKeywords.isTimestampKeyword(last.token) && (SqlKeywords.isWithKeyword(tok) || SqlKeywords.isTimeKeyword(tok) || SqlKeywords.isZoneKeyword(tok))) {
                             // Skip "with time zone" part of "timestamp with time zone" for Postgres compatibility #740, #980
                             /* Ensure that time and zone can be used as an alias for timestamp */
+                            /* CS427 Issue link: https://github.com/questdb/questdb/issues/1075 */
                             if (SqlKeywords.isWithKeyword(tok)){
                                 timestampWithTimeZone = 1;
                                 continue;
